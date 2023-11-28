@@ -1,12 +1,8 @@
-### Load Libraries ###
-library(ggplot2)
 library(dplyr)
 library(REdaS)
-library(lubridate)
 library(caret)
 library(pROC)
 
-### Load Data ###
 games <- read.csv("C:/Users/danie/Documents/NFL Big Data Bowl/Data/games.csv", header = TRUE)
 players <- read.csv("C:/Users/danie/Documents/NFL Big Data Bowl/Data/players.csv", header = TRUE)
 plays <- read.csv("C:/Users/danie/Documents/NFL Big Data Bowl/Data/plays.csv", header = TRUE)
@@ -21,77 +17,89 @@ week7 <- read.csv("C:/Users/danie/Documents/NFL Big Data Bowl/Data/tracking_week
 week8 <- read.csv("C:/Users/danie/Documents/NFL Big Data Bowl/Data/tracking_week_8.csv", header = TRUE)
 week9 <- read.csv("C:/Users/danie/Documents/NFL Big Data Bowl/Data/tracking_week_9.csv", header = TRUE)
 
-### Combine Tracking Data for Weeks 1-2 as Proof of Concept ###
+### Combine tracking data for weeks 1-2 as proof of concept (model takes too long with all 9 weeks of data) ###
 tracking <- rbind(week1, week2)
 
-### Standardizing Position Variables ###
-tracking_new <- tracking %>%
-  mutate(x_adj = ifelse(playDirection == "left", 120-x, x)) %>%
-  mutate(y_adj = ifelse(playDirection == "left", 160/3-y, y)) %>%
-  mutate(dir_adj = ifelse(playDirection == "left", 180+dir, dir)%%360) %>%
-  mutate(o_adj = ifelse(playDirection == "left", 180+o, o)%%360) %>%
-  select(-c(x, y, dir, o))
+### Standardizing position variables so all plays move in the same direction###
+trackingNew <- tracking %>%
+  mutate(xAdj = ifelse(playDirection == "left", 120-x, x)) %>%
+  mutate(yAdj = ifelse(playDirection == "left", 160/3-y, y)) %>%
+  mutate(dirAdj = ifelse(playDirection == "left", 180+dir, dir)%%360) %>%
+  mutate(oAdj = ifelse(playDirection == "left", 180+o, o)%%360) %>%
+  mutate(gamePlayId = paste0(as.character(gameId), as.character(playId), sep = "")) %>%
+  dplyr::select(-c(x, y, dir, o))
 
-### Isolating Plays with Tackles Made By ILB or MLB ###
+### Isolating plays with tackles made by ILB or MLB ###
 linebackers <- players %>%
   filter(position == "MLB" | position == "ILB") %>%
   inner_join(tackles, by = "nflId") %>%
   inner_join(plays, by = c("gameId", "playId"))
 
-### Isolating all RB and WR ###
+### Isolating all RB and WR's ###
 runningbacks <- players %>%
   filter(position == "RB" | position == "WR")
 
-### Isolating Plays Where QB runs the ball ###
+### Isolating plays where QB runs the ball ###
 qbRun <- linebackers %>%
   filter(passResult == "R")
 
-### Isolating Plays Where a RB or WR Runs the Ball ###
+### Isolating plays where a RB or WR runs the ball ###
 runningbackRun <- linebackers %>%
   filter(ballCarrierId %in% runningbacks$nflId) %>%
   filter(passResult != "C")
 
-### All Run Plays with Tackles Made By ILB or MLB ###
+### Combine for all run plays with tackles by an ILB or MLB ###
 runPlays <- rbind(qbRun, runningbackRun)
 
-### Update Column Names ###
+### When combined with the tracking data, there will be two nflId and DisplayName columns that should not be the same this will ensure the tackler nflId and displayName will be separate from the tracking player nflId and displayName ###
 colnames(runPlays)[c(1,7)] <- c("tackler", "tacklerName")
 
-### Adds Tracking Data Excluding Offensive Team and Football ###
-tracking_runPlays_defenders <- tracking_new %>%
+### Adds tracking data excluding offensive team and football ###
+trackingRunPlaysDefenders <- trackingNew %>%
   inner_join(runPlays, by = c("gameId", "playId")) %>%
   filter(displayName != "football") %>%
   filter(club == defensiveTeam)
 
-### Adds Tracking Data for Ball Carrier ###
-tracking_runPlays_ballCarrier <- tracking_new %>%
+### Adds tracking data for ball carrier ###
+trackingRunPlaysBallCarrier <- trackingNew %>%
   inner_join(runPlays, by = c("gameId", "playId")) %>%
   filter(ballCarrierId == nflId) 
 
-### Update Column Names ###
-colnames(tracking_runPlays_ballCarrier)[c(14,15)] <- c("ballCarrier_xAdj", "ballCarrier_yAdj")
+### Making ball carrier x and y coordinates column names easier to identify for when this is merged with other tracking data that will x and y coordinate columns for other players ###
+colnames(trackingRunPlaysBallCarrier)[c(14,15)] <- c("ballCarrierX", "ballCarrierY")
 
-### Keep Only Necessary Columns ###
-tracking_runPlays_ballCarrier <- tracking_runPlays_ballCarrier %>%
-  select(gameId, playId, frameId, ballCarrier_xAdj, ballCarrier_yAdj)
+### Keep only columns that will be used later on ###
+trackingRunPlaysBallCarrier <- trackingRunPlaysBallCarrier %>%
+  dplyr::select(gameId, playId, frameId, ballCarrierX, ballCarrierY)
 
 ### Adding Ball Carrier Position to Defender Tracking Data and Calculating Eucledian Distance of Defender to Ball Carrier ###
-tracking_runPlays <- tracking_runPlays_defenders %>%
-  left_join(tracking_runPlays_ballCarrier, by = c("gameId", "playId", "frameId")) %>%
-  mutate(distToBallCarrier = sqrt((x_adj - ballCarrier_xAdj)^2 + (y_adj - ballCarrier_yAdj)^2))
+trackingRunPlays <- trackingRunPlaysDefenders %>%
+  left_join(trackingRunPlaysBallCarrier, by = c("gameId", "playId", "frameId")) %>%
+  mutate(distToBallCarrier = sqrt((xAdj - ballCarrierX)^2 + (yAdj - ballCarrierY)^2))
 
-### Spliting Data into 80/20 Training and Testing Data Sets ###
-sampledf <- sample(c(TRUE, FALSE), nrow(tracking_runPlays), replace=TRUE, prob=c(0.8,0.2))
-train <- tracking_runPlays[sampledf, ]
-test <- tracking_runPlays[!sampledf, ]
+### Sampling from unique game/play combinations so the testing data is not contaminated with data from a play in the training data set ###
+gamePlayId <- unique(trackingRunPlays$gamePlayId)
+sampledf <- sample(c(TRUE, FALSE), length(gamePlayId), replace=TRUE, prob=c(0.8,0.2))
+trainGames <- gamePlayId[sampledf]
+testGames <- gamePlayId[!sampledf]
+dfTrain <- trackingRunPlays %>%
+  filter(gamePlayId %in% trainGames) 
+dfTest <- trackingRunPlays %>%
+  filter(gamePlayId %in% testGames)
 
-### Variables to Use in Tackle Probability Model ###
-train <- train %>%
-  select(x_adj, y_adj, s, a, dir_adj, event, distToBallCarrier) %>%
-  mutate(is_tackle = ifelse(event == 'tackle', "yes", "no")) %>%
+
+###############################
+# Probability of tackle model #
+###############################
+
+
+### Variables to use in tackle probability model ###
+dfTrainTackleProb <- dfTrain %>%
+  select(xAdj, yAdj, s, a, dirAdj, event, distToBallCarrier) %>%
+  mutate(isTackle = ifelse(event == 'tackle', "yes", "no")) %>%
   select(-event)
-train <- replace(train, is.na(train), "no")
-train$is_tackle  <- as.factor(train$is_tackle)
+dfTrainTackleProb <- replace(dfTrainTackleProb, is.na(dfTrainTackleProb), "no")
+dfTrainTackleProb$isTackle  <- as.factor(dfTrainTackleProb$isTackle)
 
 ### Cross Validation ###
 ctrl <- trainControl(method = "repeatedcv",
@@ -101,24 +109,24 @@ ctrl <- trainControl(method = "repeatedcv",
                      classProbs = TRUE)
 ctrl$sampling <- "up"
 
-### Gradient Boosting Machine Model to Calculate Tackle Probability ###
-mod<- train(is_tackle ~ .,
-            data = train,
+### Gradient Boosting Machine model to calculate tackle probability ###
+mod<- train(isTackle ~ .,
+            data = dfTrainTackleProb,
             method = "gbm",
             verbose = FALSE,
             metric = "ROC",
             trControl = ctrl)
 
-test_roc <- function(model, data) {
+testRoc <- function(model, data) {
   
-  roc(data$is_tackle,
+  roc(data$isTackle,
       predict(model, data, type = "prob")[,1])
   
 }
 
 mod %>%
-  test_roc(data = train) %>%
+  testRoc(data = dfTrainTackleProb) %>%
   auc()
 
-preds <- predict(mod, train, type = 'prob')
-preds_test <- predict(mod, test, type = 'prob')
+preds <- predict(mod, dfTrainTackleProb, type = 'prob')
+predsTest <- predict(mod, dfTest, type = 'prob')
