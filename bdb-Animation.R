@@ -2,6 +2,7 @@ library(gganimate)
 library(cowplot)
 library(repr)
 library(gifski)
+library(ggpmisc)
 
 ### animation of play proof of concept ###
 ### code from https://www.kaggle.com/code/tombliss/pass-rushing-edge-get-off-speed ###
@@ -9,49 +10,63 @@ library(gifski)
 
 source("https://raw.githubusercontent.com/mlfurman3/gg_field/main/gg_field.R")
 
+tackleProbs <- read.csv("C:/Users/danie/Downloads/tackleProbabilities.csv", header = TRUE)
+tackleProbs <- tackleProbs %>%
+  filter(gameId == 2022090800 & playId == 80 & defenderId == 53532) %>%
+  dplyr::select(gameId, playId, frameId, defenderId, yesOpportunity, yesAttempt, yesTackle)
+colnames(tackleProbs)[4] <- "nflId"
+
+tackleProbs$yesAttempt <- round(tackleProbs$yesAttempt, 2)
+tackleProbs$yesOpportunity <- round(tackleProbs$yesOpportunity, 2)
+tackleProbs$yesTackle <- round(tackleProbs$yesTackle, 2)
+
 games <- read.csv("C:/Users/danie/Documents/NFL Big Data Bowl/Data/games.csv", header = TRUE)
 players <- read.csv("C:/Users/danie/Documents/NFL Big Data Bowl/Data/players.csv", header = TRUE)
 plays <- read.csv("C:/Users/danie/Documents/NFL Big Data Bowl/Data/plays.csv", header = TRUE)
 tackles <- read.csv("C:/Users/danie/Documents/NFL Big Data Bowl/Data/tackles.csv", header = TRUE)
 week1 <- read.csv("C:/Users/danie/Documents/NFL Big Data Bowl/Data/tracking_week_1.csv", header = TRUE)
-week2 <- read.csv("C:/Users/danie/Documents/NFL Big Data Bowl/Data/tracking_week_2.csv", header = TRUE)
-week3 <- read.csv("C:/Users/danie/Documents/NFL Big Data Bowl/Data/tracking_week_3.csv", header = TRUE)
-week4 <- read.csv("C:/Users/danie/Documents/NFL Big Data Bowl/Data/tracking_week_4.csv", header = TRUE)
-week5 <- read.csv("C:/Users/danie/Documents/NFL Big Data Bowl/Data/tracking_week_5.csv", header = TRUE)
-week6 <- read.csv("C:/Users/danie/Documents/NFL Big Data Bowl/Data/tracking_week_6.csv", header = TRUE)
-week7 <- read.csv("C:/Users/danie/Documents/NFL Big Data Bowl/Data/tracking_week_7.csv", header = TRUE)
-week8 <- read.csv("C:/Users/danie/Documents/NFL Big Data Bowl/Data/tracking_week_8.csv", header = TRUE)
-week9 <- read.csv("C:/Users/danie/Documents/NFL Big Data Bowl/Data/tracking_week_9.csv", header = TRUE)
 
+tracking <- week1 
 
-### Combine tracking data for weeks 1-2 as proof of concept (model takes too long with all 9 weeks of data) ###
-tracking <- rbind(week1, week2, week3, week4, week5, week6, week7, week8, week9)
-
-### Standardizing position variables so all plays move in the same direction###
 trackingNew <- tracking %>%
   mutate(xAdj = ifelse(playDirection == "left", 120-x, x)) %>%
   mutate(yAdj = ifelse(playDirection == "left", 160/3-y, y)) %>%
   mutate(dirAdj = ifelse(playDirection == "left", 180+dir, dir)%%360) %>%
   mutate(oAdj = ifelse(playDirection == "left", 180+o, o)%%360) %>%
   mutate(gamePlayId = paste0(as.character(gameId), as.character(playId), sep = "")) %>%
-  dplyr::select(-c(x, y, dir, o))
+  dplyr::select(-c(x, y, dir, o)) %>%
+  filter(gameId == 2022090800 & playId == 80)
+
+df <- trackingNew %>%
+  left_join(tackleProbs, by = c("gameId", "playId", "frameId", "nflId"))
+df <- replace(df, is.na(df), 0)
+
+df <- df %>%
+  mutate(clubColor = case_when(
+    displayName == "Ernest Jones" ~ "color_yellow",
+    displayName == "Josh Allen" ~ "color_blue",
+    displayName == "football" ~ "color_brown",
+    .default = "color_grey"
+  ))
 
 examplePlay <- plays %>%
-  select(gameId, playId, playDescription) %>%
-  sample_n(1)
+  dplyr::select(gameId, playId, playDescription) %>%
+  filter(gameId == 2022090800 & playId == 80) 
 
 #merging tracking data to play
 examplePlayTracking <- inner_join(examplePlay,
-                                     trackingNew,
-                                     by = c("gameId" = "gameId",
-                                            "playId" = "playId")) 
+                                  df,
+                                  by = c("gameId" = "gameId",
+                                         "playId" = "playId"))
 
 #attributes used for plot. first is away, second is home, third is football.
 # depending on play colors get messed up sometimes 
-cols_fill <- c("dodgerblue1", "firebrick1", "#663300")
-cols_col <- c("#000000", "#000000", "#663300")
-size_vals <- c(6, 6, 4)
-shape_vals <- c(21, 21, 16)
+cols_fill <- c("yellow2", "#663300", "dodgerblue1")
+cols_fill <- c("dodgerblue1", "#663300", "gray", "yellow2")
+cols_col <- c("#000000", "#663300", "#000000")
+cols_col <- c("#000000", "#663300", "#000000", "#000000")
+size_vals <- c(8, 4, 8, 8)
+shape_vals <- c(21, 16, 21, 21)
 plot_title <- examplePlay$playDescription
 nFrames <- max(examplePlayTracking$frameId)
 
@@ -60,7 +75,7 @@ anim <- ggplot() +
   
   
   #creating field underlay
-  gg_field(yardmin = 0, yardmax = 122) +
+  gg_field(yardmin = 0, yardmax = 75) +
   
   #filling forest green for behind back of endzone
   theme(panel.background = element_rect(fill = "forestgreen",
@@ -75,18 +90,23 @@ anim <- ggplot() +
   
   #adding players
   geom_point(data = examplePlayTracking, aes(x = xAdj,
-                                                y = yAdj, 
-                                                shape = club,
-                                                fill = club,
-                                                group = nflId,
-                                                size = club,
-                                                colour = club), 
+                                             y = yAdj, 
+                                             shape = clubColor,
+                                             fill = clubColor,
+                                             group = nflId,
+                                             size = clubColor,
+                                             colour = clubColor), 
              alpha = 0.7) + 
   #adding jersey numbers
   geom_text(data = examplePlayTracking,
             aes(x = xAdj, y = yAdj, label = jerseyNumber),
             colour = "white", 
             vjust = 0.36, size = 3.5) + 
+  
+  geom_text(tackleProbs, mapping = aes(label=paste0("Tackle Opportunity = ", yesOpportunity), x= 25, y=4.5,)) +
+  geom_text(tackleProbs, mapping = aes(label=paste0("Tackle Attempt Given Opportunity = ", yesAttempt), x= 25, y=3)) +
+  geom_text(tackleProbs, mapping = aes(label=paste0("Tackle Made Given Attempt & Opportunity = ", yesTackle), x= 25, y=1.5)) +
+  geom_text(mapping = aes(label = "Tackle Probabilities for Ernest Jones"), x = 25, y = 6) +
   
   
   #titling plot with play description
@@ -99,5 +119,5 @@ anim <- ggplot() +
 
 #saving animation to display in markdown cell below:
 anim_save("ExamplePlay.gif",
-          animate(anim, width = 720, height = 440,
-                  fps = 10, nframes = nFrames, renderer = gifski_renderer()), path = "C:/Users/danie/Downloads/")
+          animate(anim, width = 1000, height = 800,
+                  fps = 5, nframes = nFrames, renderer = gifski_renderer()), path = "C:/Users/danie/Downloads/")
