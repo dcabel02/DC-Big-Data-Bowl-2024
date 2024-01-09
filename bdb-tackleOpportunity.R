@@ -38,11 +38,11 @@ trackingBallCarrier <- trackingNew %>%
   filter(ballCarrierId == nflId) 
 
 ### Making ball carrier tracking column names easier to identify for when this is merged with linebacker tracking data that have the same column names ###
-colnames(trackingBallCarrier)[c(14:17)] <- c("ballCarrierX", "ballCarrierY", "ballCarrierO", "ballCarrierDir")
+colnames(trackingBallCarrier)[c(10, 14:17)] <- c("ballCarrierS", "ballCarrierX", "ballCarrierY", "ballCarrierO", "ballCarrierDir")
 
 ### Keep only columns that will be useful when merged to linebacker tracking data later ###
 trackingBallCarrier <- trackingBallCarrier %>%
-  dplyr::select(gameId, playId, frameId, ballCarrierX, ballCarrierY, ballCarrierDir, ballCarrierO, ballCarrierDisplayName, ballCarrierId)
+  dplyr::select(gameId, playId, frameId, ballCarrierS, ballCarrierX, ballCarrierY, ballCarrierDir, ballCarrierO, ballCarrierDisplayName, ballCarrierId)
 
 ### Isolating linebackers tracking data to be merged with ball carrier tracking data later ###
 trackingLinebackers <- trackingNew %>%
@@ -54,11 +54,11 @@ trackingLinebackers <- trackingNew %>%
   left_join(tackles, by = c("gameId", "playId", "nflId"))
 
 ### Making linebacker tracking column names easier to identify for when this is merged with ball carrier tracking data that have the same column names ###
-colnames(trackingLinebackers)[c(3, 4, 14:17)] <- c("defenderId", "defenderDisplayName", "defenderX", "defenderY", "defenderO", "defenderDir")
+colnames(trackingLinebackers)[c(3, 4, 10, 14:17)] <- c("defenderId", "defenderDisplayName", "defenderS", "defenderX", "defenderY", "defenderO", "defenderDir")
 
 ### Keep only columns that will be useful when merged to ball carrier tracking data later ###
 trackingLinebackers <- trackingLinebackers %>%
-  dplyr::select(gameId, playId, frameId, defenderId, defenderDisplayName, defenderX, defenderY, defenderDir, defenderO, club, s, a, dis, event, tackle, assist, pff_missedTackle)
+  dplyr::select(gameId, playId, defenderS, frameId, defenderId, defenderDisplayName, defenderX, defenderY, defenderDir, defenderO, club, a, dis, event, tackle, assist, pff_missedTackle)
 trackingLinebackers <- replace(trackingLinebackers, is.na(trackingLinebackers), 0)
 
 ### Adding ball carrier metrics to defender tracking data and calculating Eucledian distance of defender to ball carrier ###
@@ -79,19 +79,16 @@ df <- trackingPlays %>%
          ballCarrierORads = ballCarrierO * (pi/180)) %>%
   dplyr::select(-c(ballCarrierDir, ballCarrierO, defenderDir, defenderO))
 
-## finding length of vector so vector components can be calculated 
 df <- df %>%
-  mutate(lenDefender = sqrt(defenderX^2 + defenderY^2),
-         lenBallCarrier = sqrt(ballCarrierX^2 + ballCarrierY^2))
+  mutate(dotProd = defenderS*ballCarrierS*cos(ballCarrierDirRads - defenderDirRads),
+         defenderProjX = defenderX + (defenderS*cos(defenderDirRads)),
+         defenderProjY = defenderY + (defenderS*sin(defenderDirRads)),
+         ballCarrierProjX = ballCarrierX + (ballCarrierS*cos(ballCarrierDirRads)),
+         ballCarrierProjY = ballCarrierY + (ballCarrierS*sin(ballCarrierDirRads)))
 
-## calculating vector components
-df <- df %>%
-  mutate(vxDefenderDir = lenDefender*cos(defenderDirRads), 
-         vyDefenderDir = lenDefender*sin(defenderDirRads), 
-         vxBallCarrierDir = lenBallCarrier*cos(ballCarrierDirRads),
-         vyBallCarrierDir = lenBallCarrier*sin(ballCarrierDirRads), 
-         vxDefenderO = lenDefender*cos(defenderORads), 
-         vyDefenderO = lenDefender*sin(defenderORads), 
-         vxBallCarrierO = lenBallCarrier*cos(ballCarrierORads),
-         vyBallCarrierO = lenBallCarrier*sin(ballCarrierORads))
 
+test <- df %>%
+  group_by(gameId, playId, defenderDisplayName) %>%
+  mutate(distDiff = distToBallCarrier - lag(distToBallCarrier))
+test2 <- test %>%
+  dplyr::select(gameId, playId, frameId, defenderDisplayName, distToBallCarrier, distDiff)
